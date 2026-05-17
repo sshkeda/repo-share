@@ -1,0 +1,19 @@
+{
+  "name": "repo-share",
+  "version": "0.1.0",
+  "description": "Local canonical repo source sharing without submodules or file deps",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "repo-share": "bin/repo-share.js"
+  }
+}
