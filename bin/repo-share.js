@@ -126,11 +126,23 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isExcluded(rel, exclude) {
+  return [...DEFAULT_EXCLUDES, ...exclude].some((pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern));
+}
+
 function shouldInclude(rel, include, exclude) {
-  const excluded = [...DEFAULT_EXCLUDES, ...exclude].some((pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern));
-  if (excluded) return false;
+  if (isExcluded(rel, exclude)) return false;
   if (include.length === 0) return true;
   return include.some((pattern) => matchesPattern(rel, pattern));
+}
+
+function shouldDescend(rel, include, exclude) {
+  if (isExcluded(rel, exclude)) return false;
+  if (include.length === 0) return true;
+  return include.some((pattern) => {
+    const clean = pattern.replace(/^\.\//, "").replace(/\/$/, "");
+    return matchesPattern(rel, clean) || clean.startsWith(`${rel}/`) || clean.includes("*");
+  });
 }
 
 function walkFiles(root, include = [], exclude = []) {
@@ -139,9 +151,11 @@ function walkFiles(root, include = [], exclude = []) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
       const rel = relative(root, abs).replaceAll("\\", "/");
-      if (!shouldInclude(rel, include, exclude)) continue;
-      if (entry.isDirectory()) walk(abs);
-      else if (entry.isFile()) out.push(rel);
+      if (entry.isDirectory()) {
+        if (shouldDescend(rel, include, exclude)) walk(abs);
+      } else if (entry.isFile() && shouldInclude(rel, include, exclude)) {
+        out.push(rel);
+      }
     }
   };
   walk(root);

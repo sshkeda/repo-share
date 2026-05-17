@@ -36,8 +36,10 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   initRepo(source);
   initRepo(consumer);
 
+  mkdirSync(join(source, "bin"));
   writeFileSync(join(source, "index.ts"), "export const value = 1;\n");
   writeFileSync(join(source, "README.md"), "source readme\n");
+  writeFileSync(join(source, "bin/cli.js"), "#!/usr/bin/env node\nconsole.log('cli');\n");
   git(source, ["add", "."]);
   git(source, ["commit", "-qm", "init source"]);
 
@@ -47,9 +49,10 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.match(dirty.stderr, /canonical source repo has uncommitted changes/);
 
   rmSync(join(source, "dirty.txt"));
-  const added = run(consumer, ["add", "shared", "--from", source, "--to", "vendor/shared", "--include", "index.ts,README.md"]);
+  const added = run(consumer, ["add", "shared", "--from", source, "--to", "vendor/shared", "--include", "index.ts,README.md,bin/cli.js"]);
   assert.equal(added.status, 0, added.stderr || added.stdout);
   assert.equal(readFileSync(join(consumer, "vendor/shared/index.ts"), "utf8"), "export const value = 1;\n");
+  assert.equal(readFileSync(join(consumer, "vendor/shared/bin/cli.js"), "utf8"), "#!/usr/bin/env node\nconsole.log('cli');\n");
   assert.ok(existsSync(join(consumer, ".repo-share.json")));
   assert.match(readFileSync(join(consumer, "vendor/shared/AGENTS.md"), "utf8"), /DO NOT EDIT files in this directory directly/);
   assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
