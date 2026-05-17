@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, copyFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MANIFEST = ".repo-share.json";
+const GUARD_FILE = "AGENTS.md";
+const META_FILE = ".repo-share-copy.json";
+const RESERVED_TARGET_FILES = new Set([GUARD_FILE, META_FILE]);
 const DEFAULT_EXCLUDES = [".git", "node_modules", "dist", "coverage", ".DS_Store"];
 
 function die(message, code = 1) {
@@ -25,6 +28,7 @@ Usage:
 Invariants:
   - add/sync/check without --locked require the canonical source repo to be a clean git worktree.
   - check --locked does not need the canonical repo; it verifies committed target snapshots against stored hashes.
+  - copied target files are marked read-only and include an AGENTS.md guard that tells agents to edit the canonical source instead.
 `);
 }
 
@@ -153,6 +157,51 @@ function hashFiles(root, files) {
   return hash.digest("hex");
 }
 
+function ensureNoReservedManagedFiles(files, share) {
+  const reserved = files.filter((file) => RESERVED_TARGET_FILES.has(file));
+  if (reserved.length > 0) {
+    die(`${share.name} source includes repo-share reserved target file(s): ${reserved.join(", ")}`);
+  }
+}
+
+function writeTargetGuardFiles(targetRoot, share, copied) {
+  const guard = `# repo-share managed copy\n\nDO NOT EDIT files in this directory directly.\n\nThis directory is a generated copy managed by \`repo-share\`. Edit the canonical source repo, commit it there, then run \`repo-share sync ${share.name}\` from the consumer repo.\n\nCanonical source: ${share.source}${share.sourcePath && share.sourcePath !== "." ? `/${share.sourcePath}` : ""}\nTarget path: ${share.targetPath}\nSource commit: ${copied.sourceHead}\nSnapshot hash: ${copied.hash}\n\nFor agents: treat the source files here as read-only evidence. Do not patch, reformat, or hand-edit them in this consumer repo.\n`;
+  writeFileSync(join(targetRoot, GUARD_FILE), guard);
+  writeFileSync(
+    join(targetRoot, META_FILE),
+    JSON.stringify(
+      {
+        version: 1,
+        managedBy: "repo-share",
+        name: share.name,
+        source: share.source,
+        sourcePath: share.sourcePath || ".",
+        targetPath: share.targetPath,
+        sourceHead: copied.sourceHead,
+        hash: copied.hash,
+        updatedAt: copied.updatedAt,
+        managedFiles: copied.files,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+function makeReadOnly(abs) {
+  try {
+    chmodSync(abs, 0o444);
+  } catch {
+    // Best-effort guard. The hash/AGENTS.md protections still apply on filesystems that reject chmod.
+  }
+}
+
+function protectTargetFiles(targetRoot, files) {
+  for (const rel of [...files, GUARD_FILE, META_FILE]) {
+    makeReadOnly(join(targetRoot, rel));
+  }
+}
+
 function copyShare(share, repoRoot = cwd()) {
   const source = resolvePath(share.source, repoRoot);
   ensureCleanGitRepo(source);
@@ -161,6 +210,7 @@ function copyShare(share, repoRoot = cwd()) {
   const include = share.include || [];
   const exclude = share.exclude || [];
   const files = walkFiles(sourceRoot, include, exclude);
+  ensureNoReservedManagedFiles(files, share);
   rmSync(targetRoot, { recursive: true, force: true });
   mkdirSync(targetRoot, { recursive: true });
   for (const rel of files) {
@@ -168,13 +218,21 @@ function copyShare(share, repoRoot = cwd()) {
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(sourceRoot, rel), dest);
   }
-  return { files, hash: hashFiles(targetRoot, files), sourceHead: gitHead(source) };
+  const copied = { files, hash: hashFiles(targetRoot, files), sourceHead: gitHead(source), updatedAt: new Date().toISOString() };
+  writeTargetGuardFiles(targetRoot, share, copied);
+  protectTargetFiles(targetRoot, files);
+  return copied;
 }
 
 function targetFiles(share, repoRoot = cwd()) {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   if (!existsSync(targetRoot)) return [];
-  return walkFiles(targetRoot, [], []);
+  return walkFiles(targetRoot, [], []).filter((file) => !RESERVED_TARGET_FILES.has(file));
+}
+
+function hasTargetGuards(share, repoRoot = cwd()) {
+  const targetRoot = resolvePath(share.targetPath, repoRoot);
+  return existsSync(join(targetRoot, GUARD_FILE)) && existsSync(join(targetRoot, META_FILE));
 }
 
 function findShare(manifest, name) {
@@ -204,7 +262,7 @@ function cmdAdd(args) {
     exclude: normalizeList(args.flags.exclude),
   };
   const copied = copyShare(share);
-  Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: new Date().toISOString() });
+  Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: copied.updatedAt });
   manifest.shares = [...(manifest.shares || []), share];
   writeManifest(manifest);
   console.log(`added ${name}: ${copied.files.length} files -> ${to}`);
@@ -215,7 +273,7 @@ function cmdSync(args) {
   const shares = findShare(manifest, args.name);
   for (const share of shares) {
     const copied = copyShare(share);
-    Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: new Date().toISOString() });
+    Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: copied.updatedAt });
     console.log(`synced ${share.name}: ${copied.files.length} files, ${copied.hash.slice(0, 12)}`);
   }
   writeManifest(manifest);
@@ -233,6 +291,9 @@ function cmdCheck(args) {
     if (hash !== share.hash) {
       failed = true;
       console.error(`stale ${share.name}: expected ${share.hash}, got ${hash}`);
+    } else if (!hasTargetGuards(share)) {
+      failed = true;
+      console.error(`unguarded ${share.name}: missing ${GUARD_FILE} or ${META_FILE} in ${share.targetPath}`);
     } else {
       console.log(`ok ${share.name}: ${hash.slice(0, 12)}`);
     }

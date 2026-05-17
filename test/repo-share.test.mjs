@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -51,6 +51,9 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.equal(added.status, 0, added.stderr || added.stdout);
   assert.equal(readFileSync(join(consumer, "vendor/shared/index.ts"), "utf8"), "export const value = 1;\n");
   assert.ok(existsSync(join(consumer, ".repo-share.json")));
+  assert.match(readFileSync(join(consumer, "vendor/shared/AGENTS.md"), "utf8"), /DO NOT EDIT files in this directory directly/);
+  assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
+  assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "copied files are read-only");
 
   const lockedOk = run(consumer, ["check", "--locked"]);
   assert.equal(lockedOk.status, 0, lockedOk.stderr || lockedOk.stdout);
@@ -64,6 +67,12 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.notEqual(unlockedFails.status, 0);
   assert.match(unlockedFails.stderr, /canonical source repo has uncommitted changes/);
 
+  rmSync(join(consumer, "vendor/shared/AGENTS.md"));
+  const unguarded = run(consumer, ["check", "--locked"]);
+  assert.notEqual(unguarded.status, 0);
+  assert.match(unguarded.stderr, /unguarded shared/);
+
+  chmodSync(join(consumer, "vendor/shared/index.ts"), 0o644);
   writeFileSync(join(consumer, "vendor/shared/index.ts"), "tampered\n");
   const stale = run(consumer, ["check", "--locked"]);
   assert.notEqual(stale.status, 0);
