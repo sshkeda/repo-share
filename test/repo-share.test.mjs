@@ -55,8 +55,8 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.equal(readFileSync(join(consumer, "vendor/shared/index.ts"), "utf8"), "export const value = 1;\n");
   assert.equal(readFileSync(join(consumer, "vendor/shared/bin/cli.js"), "utf8"), "#!/usr/bin/env node\nconsole.log('cli');\n");
   assert.ok(existsSync(join(consumer, ".repo-share.json")));
-  assert.ok(!existsSync(join(consumer, "vendor/shared/AGENTS.md")), "repo-share does not create AGENTS.md");
-  assert.match(readFileSync(join(consumer, "vendor/shared/README.repo-share.md"), "utf8"), /DO NOT EDIT files in this directory directly/);
+  assert.ok(!existsSync(join(consumer, "vendor/shared/AGENTS.md")), "repo-share does not create or copy AGENTS.md");
+  assert.ok(!existsSync(join(consumer, "vendor/shared/README.repo-share.md")), "repo-share does not create markdown guard files");
   assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
   assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "copied files are read-only");
 
@@ -88,11 +88,12 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.notEqual(unlockedFails.status, 0);
   assert.match(unlockedFails.stderr, /canonical source repo has uncommitted changes/);
 
-  rmSync(join(consumer, "vendor/shared/README.repo-share.md"));
-  const unguarded = run(consumer, ["check", "--locked"]);
-  assert.notEqual(unguarded.status, 0);
-  assert.match(unguarded.stderr, /unguarded shared/);
+  rmSync(join(consumer, "vendor/shared/.repo-share-copy.json"));
+  const missingMetadata = run(consumer, ["check", "--locked"]);
+  assert.notEqual(missingMetadata.status, 0);
+  assert.match(missingMetadata.stderr, /missing metadata shared/);
 
+  writeFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "{}\n");
   chmodSync(join(consumer, "vendor/shared/index.ts"), 0o644);
   writeFileSync(join(consumer, "vendor/shared/index.ts"), "tampered\n");
   const stale = run(consumer, ["check", "--locked"]);

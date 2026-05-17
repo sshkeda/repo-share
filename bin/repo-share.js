@@ -5,9 +5,8 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MANIFEST = ".repo-share.json";
-const GUARD_FILE = "README.repo-share.md";
 const META_FILE = ".repo-share-copy.json";
-const RESERVED_TARGET_FILES = new Set([GUARD_FILE, META_FILE]);
+const RESERVED_TARGET_FILES = new Set([META_FILE]);
 const DEFAULT_EXCLUDES = [".git", "AGENTS.md", "node_modules", "dist", "coverage", ".turbo", ".DS_Store", "*.tsbuildinfo"];
 
 function die(message, code = 1) {
@@ -29,7 +28,7 @@ Usage:
 Invariants:
   - add/sync/check without --locked require the canonical source repo to be a clean git worktree.
   - check --locked does not need the canonical repo; it verifies committed target snapshots against stored hashes.
-  - copied target files are marked read-only and include a README.repo-share.md guard that tells agents to edit the canonical source instead.
+  - copied target files are marked read-only.
   - check reapplies read-only protection after successful verification, useful after a fresh git checkout.
 `);
 }
@@ -180,9 +179,7 @@ function ensureNoReservedManagedFiles(files, share) {
   }
 }
 
-function writeTargetGuardFiles(targetRoot, share, copied) {
-  const guard = `# repo-share managed copy\n\nDO NOT EDIT files in this directory directly.\n\nThis directory is a generated copy managed by \`repo-share\`. Edit the canonical source repo, commit it there, then run \`repo-share sync ${share.name}\` from the consumer repo.\n\nCanonical source: ${share.source}${share.sourcePath && share.sourcePath !== "." ? `/${share.sourcePath}` : ""}\nTarget path: ${share.targetPath}\nSource commit: ${copied.sourceHead}\nSnapshot hash: ${copied.hash}\n\nFor agents: treat the source files here as read-only evidence. Do not patch, reformat, or hand-edit them in this consumer repo.\n`;
-  writeFileSync(join(targetRoot, GUARD_FILE), guard);
+function writeTargetMetadata(targetRoot, share, copied) {
   writeFileSync(
     join(targetRoot, META_FILE),
     JSON.stringify(
@@ -208,12 +205,12 @@ function makeReadOnly(abs) {
   try {
     chmodSync(abs, 0o444);
   } catch {
-    // Best-effort guard. The hash/README.repo-share.md protections still apply on filesystems that reject chmod.
+    // Best-effort guard. Hash checks still catch edits on filesystems that reject chmod.
   }
 }
 
 function protectTargetFiles(targetRoot, files) {
-  for (const rel of [...files, GUARD_FILE, META_FILE]) {
+  for (const rel of [...files, META_FILE]) {
     makeReadOnly(join(targetRoot, rel));
   }
 }
@@ -235,7 +232,7 @@ function copyShare(share, repoRoot = cwd()) {
     copyFileSync(join(sourceRoot, rel), dest);
   }
   const copied = { files, hash: hashFiles(targetRoot, files), sourceHead: gitHead(source), updatedAt: new Date().toISOString() };
-  writeTargetGuardFiles(targetRoot, share, copied);
+  writeTargetMetadata(targetRoot, share, copied);
   protectTargetFiles(targetRoot, files);
   return copied;
 }
@@ -246,9 +243,9 @@ function targetFiles(share, repoRoot = cwd()) {
   return walkFiles(targetRoot, [], []).filter((file) => !RESERVED_TARGET_FILES.has(file));
 }
 
-function hasTargetGuards(share, repoRoot = cwd()) {
+function hasTargetMetadata(share, repoRoot = cwd()) {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
-  return existsSync(join(targetRoot, GUARD_FILE)) && existsSync(join(targetRoot, META_FILE));
+  return existsSync(join(targetRoot, META_FILE));
 }
 
 function protectShareTarget(share, repoRoot = cwd()) {
@@ -315,9 +312,9 @@ function cmdCheck(args) {
     if (hash !== share.hash) {
       failed = true;
       console.error(`stale ${share.name}: expected ${share.hash}, got ${hash}`);
-    } else if (!hasTargetGuards(share)) {
+    } else if (!hasTargetMetadata(share)) {
       failed = true;
-      console.error(`unguarded ${share.name}: missing ${GUARD_FILE} or ${META_FILE} in ${share.targetPath}`);
+      console.error(`missing metadata ${share.name}: missing ${META_FILE} in ${share.targetPath}`);
     } else {
       protectShareTarget(share);
       console.log(`ok ${share.name}: ${hash.slice(0, 12)}`);
