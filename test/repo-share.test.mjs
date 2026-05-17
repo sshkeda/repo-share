@@ -55,9 +55,19 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
   assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "copied files are read-only");
 
+  chmodSync(join(consumer, "vendor/shared/index.ts"), 0o644);
+  assert.notEqual(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "test fixture made copy writable");
+
   const lockedOk = run(consumer, ["check", "--locked"]);
   assert.equal(lockedOk.status, 0, lockedOk.stderr || lockedOk.stdout);
   assert.match(lockedOk.stdout, /ok shared/);
+  assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "check reprotects copied files");
+
+  chmodSync(join(consumer, "vendor/shared/index.ts"), 0o644);
+  const protectedOk = run(consumer, ["protect", "shared"]);
+  assert.equal(protectedOk.status, 0, protectedOk.stderr || protectedOk.stdout);
+  assert.match(protectedOk.stdout, /protected shared/);
+  assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "protect makes copied files read-only");
 
   writeFileSync(join(source, "dirty.txt"), "dirty again\n");
   const lockedStillOk = run(consumer, ["check", "--locked"]);

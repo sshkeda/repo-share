@@ -22,6 +22,7 @@ Usage:
   repo-share add <name> --from <canonical-repo> --to <target-path> [--include a,b] [--exclude a,b]
   repo-share sync [name]
   repo-share check [--locked] [name]
+  repo-share protect [name]
   repo-share list
   repo-share diff [name]
 
@@ -29,6 +30,7 @@ Invariants:
   - add/sync/check without --locked require the canonical source repo to be a clean git worktree.
   - check --locked does not need the canonical repo; it verifies committed target snapshots against stored hashes.
   - copied target files are marked read-only and include an AGENTS.md guard that tells agents to edit the canonical source instead.
+  - check reapplies read-only protection after successful verification, useful after a fresh git checkout.
 `);
 }
 
@@ -235,6 +237,14 @@ function hasTargetGuards(share, repoRoot = cwd()) {
   return existsSync(join(targetRoot, GUARD_FILE)) && existsSync(join(targetRoot, META_FILE));
 }
 
+function protectShareTarget(share, repoRoot = cwd()) {
+  const targetRoot = resolvePath(share.targetPath, repoRoot);
+  if (!existsSync(targetRoot)) die(`missing target for ${share.name}: ${share.targetPath}`);
+  const files = targetFiles(share, repoRoot);
+  protectTargetFiles(targetRoot, files);
+  return files.length;
+}
+
 function findShare(manifest, name) {
   const shares = manifest.shares || [];
   if (!name) return shares;
@@ -295,10 +305,20 @@ function cmdCheck(args) {
       failed = true;
       console.error(`unguarded ${share.name}: missing ${GUARD_FILE} or ${META_FILE} in ${share.targetPath}`);
     } else {
+      protectShareTarget(share);
       console.log(`ok ${share.name}: ${hash.slice(0, 12)}`);
     }
   }
   if (failed) process.exit(1);
+}
+
+function cmdProtect(args) {
+  const manifest = readManifest();
+  const shares = findShare(manifest, args.name);
+  for (const share of shares) {
+    const count = protectShareTarget(share);
+    console.log(`protected ${share.name}: ${count} files -> ${share.targetPath}`);
+  }
 }
 
 function cmdList() {
@@ -336,6 +356,7 @@ if (!args.cmd || args.cmd === "help" || args.cmd === "--help" || args.cmd === "-
 else if (args.cmd === "add") cmdAdd(args);
 else if (args.cmd === "sync") cmdSync(args);
 else if (args.cmd === "check") cmdCheck(args);
+else if (args.cmd === "protect") cmdProtect(args);
 else if (args.cmd === "list") cmdList(args);
 else if (args.cmd === "diff") cmdDiff(args);
 else die(`unknown command ${args.cmd}`);
