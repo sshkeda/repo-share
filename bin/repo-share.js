@@ -5,10 +5,10 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MANIFEST = ".repo-share.json";
-const GUARD_FILE = "AGENTS.md";
+const GUARD_FILE = "README.repo-share.md";
 const META_FILE = ".repo-share-copy.json";
 const RESERVED_TARGET_FILES = new Set([GUARD_FILE, META_FILE]);
-const DEFAULT_EXCLUDES = [".git", "node_modules", "dist", "coverage", ".turbo", ".DS_Store", "*.tsbuildinfo"];
+const DEFAULT_EXCLUDES = [".git", "AGENTS.md", "node_modules", "dist", "coverage", ".turbo", ".DS_Store", "*.tsbuildinfo"];
 
 function die(message, code = 1) {
   console.error(`repo-share: ${message}`);
@@ -29,7 +29,7 @@ Usage:
 Invariants:
   - add/sync/check without --locked require the canonical source repo to be a clean git worktree.
   - check --locked does not need the canonical repo; it verifies committed target snapshots against stored hashes.
-  - copied target files are marked read-only and include an AGENTS.md guard that tells agents to edit the canonical source instead.
+  - copied target files are marked read-only and include a README.repo-share.md guard that tells agents to edit the canonical source instead.
   - check reapplies read-only protection after successful verification, useful after a fresh git checkout.
 `);
 }
@@ -208,7 +208,7 @@ function makeReadOnly(abs) {
   try {
     chmodSync(abs, 0o444);
   } catch {
-    // Best-effort guard. The hash/AGENTS.md protections still apply on filesystems that reject chmod.
+    // Best-effort guard. The hash/README.repo-share.md protections still apply on filesystems that reject chmod.
   }
 }
 

@@ -39,6 +39,7 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   mkdirSync(join(source, "bin"));
   writeFileSync(join(source, "index.ts"), "export const value = 1;\n");
   writeFileSync(join(source, "README.md"), "source readme\n");
+  writeFileSync(join(source, "AGENTS.md"), "source agent instructions should not be copied\n");
   writeFileSync(join(source, "bin/cli.js"), "#!/usr/bin/env node\nconsole.log('cli');\n");
   git(source, ["add", "."]);
   git(source, ["commit", "-qm", "init source"]);
@@ -54,7 +55,8 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.equal(readFileSync(join(consumer, "vendor/shared/index.ts"), "utf8"), "export const value = 1;\n");
   assert.equal(readFileSync(join(consumer, "vendor/shared/bin/cli.js"), "utf8"), "#!/usr/bin/env node\nconsole.log('cli');\n");
   assert.ok(existsSync(join(consumer, ".repo-share.json")));
-  assert.match(readFileSync(join(consumer, "vendor/shared/AGENTS.md"), "utf8"), /DO NOT EDIT files in this directory directly/);
+  assert.ok(!existsSync(join(consumer, "vendor/shared/AGENTS.md")), "repo-share does not create AGENTS.md");
+  assert.match(readFileSync(join(consumer, "vendor/shared/README.repo-share.md"), "utf8"), /DO NOT EDIT files in this directory directly/);
   assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
   assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "copied files are read-only");
 
@@ -86,7 +88,7 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.notEqual(unlockedFails.status, 0);
   assert.match(unlockedFails.stderr, /canonical source repo has uncommitted changes/);
 
-  rmSync(join(consumer, "vendor/shared/AGENTS.md"));
+  rmSync(join(consumer, "vendor/shared/README.repo-share.md"));
   const unguarded = run(consumer, ["check", "--locked"]);
   assert.notEqual(unguarded.status, 0);
   assert.match(unguarded.stderr, /unguarded shared/);
