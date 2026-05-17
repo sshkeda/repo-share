@@ -8,7 +8,7 @@ const MANIFEST = ".repo-share.json";
 const GUARD_FILE = "AGENTS.md";
 const META_FILE = ".repo-share-copy.json";
 const RESERVED_TARGET_FILES = new Set([GUARD_FILE, META_FILE]);
-const DEFAULT_EXCLUDES = [".git", "node_modules", "dist", "coverage", ".DS_Store"];
+const DEFAULT_EXCLUDES = [".git", "node_modules", "dist", "coverage", ".turbo", ".DS_Store", "*.tsbuildinfo"];
 
 function die(message, code = 1) {
   console.error(`repo-share: ${message}`);

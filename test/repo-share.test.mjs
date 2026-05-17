@@ -72,6 +72,12 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.match(protectedOk.stdout, /protected shared/);
   assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "protect makes copied files read-only");
 
+  mkdirSync(join(consumer, "vendor/shared/.turbo"));
+  writeFileSync(join(consumer, "vendor/shared/.turbo/turbo-typecheck.log"), "generated\n");
+  writeFileSync(join(consumer, "vendor/shared/tsconfig.tsbuildinfo"), "generated\n");
+  const generatedOk = run(consumer, ["check", "--locked"]);
+  assert.equal(generatedOk.status, 0, generatedOk.stderr || generatedOk.stdout);
+
   writeFileSync(join(source, "dirty.txt"), "dirty again\n");
   const lockedStillOk = run(consumer, ["check", "--locked"]);
   assert.equal(lockedStillOk.status, 0, lockedStillOk.stderr || lockedStillOk.stdout);
