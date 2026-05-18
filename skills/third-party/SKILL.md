@@ -1,6 +1,6 @@
 ---
 name: third-party
-description: Use when editing a repo that contains third_party/ or repo-share managed copies. Explains how to treat copied third-party/shared source: do not edit copies; edit canonical source repos and sync with repo-share.
+description: "Use when editing a repo that contains third_party/ or repo-share managed copies. Explains how to treat copied third-party/shared source: do not edit copies; edit canonical source repos and sync with repo-share."
 ---
 
 # Third-party / repo-share managed source
