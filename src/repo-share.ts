@@ -230,7 +230,9 @@ function ensureCleanGitRepo(source: string, allowDirty: boolean = false): void {
 }
 
 function gitHead(source: string): string {
-  return git(source, ["rev-parse", "HEAD"]);
+  const proc = spawnSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" });
+  if (proc.status !== 0) return "unborn";
+  return proc.stdout.trim();
 }
 
 function escapeRegex(value: string): string {
