@@ -9,11 +9,27 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "vendoring",
+    "third-party",
+    "monorepo",
+    "shared-source",
+    "snapshot",
+    "hash-verification",
+    "cli"
+  ],
+  "author": "Stephen Shkeda",
   "license": "MIT",
   "type": "module",
   "bin": {
     "repo-share": "bin/repo-share.js"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sshkeda/repo-share.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sshkeda/repo-share/issues"
+  },
+  "homepage": "https://github.com/sshkeda/repo-share#readme"
 }
