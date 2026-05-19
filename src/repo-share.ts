@@ -29,6 +29,7 @@ const DEFAULT_EXCLUDES = [
 
 interface ParsedFlags {
   locked?: boolean;
+  allowDirty?: boolean;
   from?: string;
   to?: string;
   include?: string;
@@ -74,18 +75,19 @@ function usage(): void {
   console.log(`repo-share
 
 Usage:
-  repo-share add <name> --from <canonical-repo> --to <target-path> [--include a,b] [--exclude a,b]
-  repo-share sync [name]
-  repo-share check [--locked] [name]
+  repo-share add <name> --from <canonical-repo> --to <target-path> [--include a,b] [--exclude a,b] [--allow-dirty]
+  repo-share sync [name] [--allow-dirty]
+  repo-share check [--locked] [--allow-dirty] [name]
   repo-share protect [name]
   repo-share list
-  repo-share diff [name]
+  repo-share diff [name] [--allow-dirty]
 
 Invariants:
-  - add/sync/check without --locked require the canonical source repo to be a clean git worktree.
+  - add/sync/check without --locked require the canonical source repo to be a clean git worktree, unless --allow-dirty is set.
   - check --locked does not need the canonical repo; it verifies committed target snapshots against stored hashes.
   - copied target files are marked read-only.
   - check reapplies read-only protection after successful verification, useful after a fresh git checkout.
+  - --allow-dirty skips the clean-worktree check and snapshots the working tree as-is; useful when sharing README.md or other informational files from repos that have unrelated wip in other files.
 `);
 }
 
@@ -105,6 +107,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     const key = token.slice(2);
     if (key === "locked") {
       flags.locked = true;
+      continue;
+    }
+    if (key === "allow-dirty") {
+      flags.allowDirty = true;
       continue;
     }
     const value = tokens[++i];
@@ -208,11 +214,18 @@ function git(source: string, args: string[]): string {
   return proc.stdout.trim();
 }
 
-function ensureCleanGitRepo(source: string): void {
+function ensureGitRepo(source: string): void {
   if (!existsSync(join(source, ".git"))) die(`canonical source is not a git repo: ${source}`);
+}
+
+function ensureCleanGitRepo(source: string, allowDirty: boolean = false): void {
+  ensureGitRepo(source);
+  if (allowDirty) return;
   const status = git(source, ["status", "--porcelain"]);
   if (status) {
-    die(`canonical source repo has uncommitted changes: ${source}\n${status}\nCommit/stash/clean it before sharing.`);
+    die(
+      `canonical source repo has uncommitted changes: ${source}\n${status}\nCommit/stash/clean it before sharing, or pass --allow-dirty to snapshot the working tree as-is.`,
+    );
   }
 }
 
@@ -328,9 +341,9 @@ function protectTargetFiles(targetRoot: string, files: string[]): void {
   }
 }
 
-function copyShare(share: Share, repoRoot: string = cwd()): CopyResult {
+function copyShare(share: Share, repoRoot: string = cwd(), allowDirty: boolean = false): CopyResult {
   const source = resolvePath(share.source, repoRoot);
-  ensureCleanGitRepo(source);
+  ensureCleanGitRepo(source, allowDirty);
   const sourceRoot = resolvePath(share.sourcePath || ".", source);
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   const include = share.include || [];
@@ -391,7 +404,8 @@ function cmdAdd(args: ParsedArgs): void {
   const manifest = readManifest();
   if (manifest.shares.some((share) => share.name === name)) die(`share already exists: ${name}`);
   const source = resolvePath(from);
-  ensureCleanGitRepo(source);
+  const allowDirty = Boolean(args.flags.allowDirty);
+  ensureCleanGitRepo(source, allowDirty);
   const share: Share = {
     name,
     source: displayPath(source),
@@ -400,7 +414,7 @@ function cmdAdd(args: ParsedArgs): void {
     include: normalizeList(args.flags.include),
     exclude: normalizeList(args.flags.exclude),
   };
-  const copied = copyShare(share);
+  const copied = copyShare(share, cwd(), allowDirty);
   share.hash = copied.hash;
   share.sourceHead = copied.sourceHead;
   share.updatedAt = copied.updatedAt;
@@ -412,8 +426,9 @@ function cmdAdd(args: ParsedArgs): void {
 function cmdSync(args: ParsedArgs): void {
   const manifest = readManifest();
   const shares = findShare(manifest, args.name);
+  const allowDirty = Boolean(args.flags.allowDirty);
   for (const share of shares) {
-    const copied = copyShare(share);
+    const copied = copyShare(share, cwd(), allowDirty);
     share.hash = copied.hash;
     share.sourceHead = copied.sourceHead;
     share.updatedAt = copied.updatedAt;
@@ -427,7 +442,7 @@ function cmdCheck(args: ParsedArgs): void {
   const shares = findShare(manifest, args.name);
   let failed = false;
   for (const share of shares) {
-    if (!args.flags.locked) ensureCleanGitRepo(resolvePath(share.source));
+    if (!args.flags.locked) ensureCleanGitRepo(resolvePath(share.source), Boolean(args.flags.allowDirty));
     const targetRoot = resolvePath(share.targetPath);
     const files = targetFiles(share);
     const hash = existsSync(targetRoot) ? hashFiles(targetRoot, files) : "missing";
@@ -466,7 +481,7 @@ function cmdDiff(args: ParsedArgs): void {
   const shares = findShare(manifest, args.name);
   for (const share of shares) {
     const source = resolvePath(share.source);
-    ensureCleanGitRepo(source);
+    ensureCleanGitRepo(source, Boolean(args.flags.allowDirty));
     const tmp = join(process.env.TMPDIR || "/tmp", `repo-share-${process.pid}-${share.name}`);
     rmSync(tmp, { recursive: true, force: true });
     mkdirSync(tmp, { recursive: true });
