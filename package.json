@@ -2,12 +2,29 @@
   "name": "repo-share",
   "version": "0.1.0",
   "description": "Local canonical repo source sharing without submodules or file deps",
-  "main": "index.js",
+  "main": "dist/repo-share.js",
+  "type": "module",
+  "bin": {
+    "repo-share": "./dist/repo-share.js"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "vendoring",
@@ -20,10 +37,6 @@
   ],
   "author": "Stephen Shkeda",
   "license": "MIT",
-  "type": "module",
-  "bin": {
-    "repo-share": "bin/repo-share.js"
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/sshkeda/repo-share.git"
@@ -31,5 +44,15 @@
   "bugs": {
     "url": "https://github.com/sshkeda/repo-share/issues"
   },
-  "homepage": "https://github.com/sshkeda/repo-share#readme"
+  "homepage": "https://github.com/sshkeda/repo-share#readme",
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.20.0"
+  }
 }

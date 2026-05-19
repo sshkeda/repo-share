@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const CLI = new URL("../bin/repo-share.js", import.meta.url).pathname;
+const CLI = new URL("../dist/repo-share.js", import.meta.url).pathname;
 
 function run(cwd, args, opts = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
@@ -45,23 +45,54 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   git(source, ["commit", "-qm", "init source"]);
 
   writeFileSync(join(source, "dirty.txt"), "uncommitted\n");
-  const dirty = run(consumer, ["add", "shared", "--from", source, "--to", "vendor/shared", "--include", "index.ts,README.md"]);
+  const dirty = run(consumer, [
+    "add",
+    "shared",
+    "--from",
+    source,
+    "--to",
+    "vendor/shared",
+    "--include",
+    "index.ts,README.md",
+  ]);
   assert.notEqual(dirty.status, 0);
   assert.match(dirty.stderr, /canonical source repo has uncommitted changes/);
 
   rmSync(join(source, "dirty.txt"));
-  const added = run(consumer, ["add", "shared", "--from", source, "--to", "vendor/shared", "--include", "index.ts,README.md,bin/cli.js"]);
+  const added = run(consumer, [
+    "add",
+    "shared",
+    "--from",
+    source,
+    "--to",
+    "vendor/shared",
+    "--include",
+    "index.ts,README.md,bin/cli.js",
+  ]);
   assert.equal(added.status, 0, added.stderr || added.stdout);
   assert.equal(readFileSync(join(consumer, "vendor/shared/index.ts"), "utf8"), "export const value = 1;\n");
-  assert.equal(readFileSync(join(consumer, "vendor/shared/bin/cli.js"), "utf8"), "#!/usr/bin/env node\nconsole.log('cli');\n");
+  assert.equal(
+    readFileSync(join(consumer, "vendor/shared/bin/cli.js"), "utf8"),
+    "#!/usr/bin/env node\nconsole.log('cli');\n",
+  );
   assert.ok(existsSync(join(consumer, ".repo-share.json")));
   assert.ok(!existsSync(join(consumer, "vendor/shared/AGENTS.md")), "repo-share does not create or copy AGENTS.md");
-  assert.ok(!existsSync(join(consumer, "vendor/shared/README.repo-share.md")), "repo-share does not create markdown guard files");
-  assert.match(readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"), /"managedBy": "repo-share"/);
+  assert.ok(
+    !existsSync(join(consumer, "vendor/shared/README.repo-share.md")),
+    "repo-share does not create markdown guard files",
+  );
+  assert.match(
+    readFileSync(join(consumer, "vendor/shared/.repo-share-copy.json"), "utf8"),
+    /"managedBy": "repo-share"/,
+  );
   assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "copied files are read-only");
 
   chmodSync(join(consumer, "vendor/shared/index.ts"), 0o644);
-  assert.notEqual(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "test fixture made copy writable");
+  assert.notEqual(
+    statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222,
+    0,
+    "test fixture made copy writable",
+  );
 
   const lockedOk = run(consumer, ["check", "--locked"]);
   assert.equal(lockedOk.status, 0, lockedOk.stderr || lockedOk.stdout);
@@ -72,7 +103,11 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   const protectedOk = run(consumer, ["protect", "shared"]);
   assert.equal(protectedOk.status, 0, protectedOk.stderr || protectedOk.stdout);
   assert.match(protectedOk.stdout, /protected shared/);
-  assert.equal(statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222, 0, "protect makes copied files read-only");
+  assert.equal(
+    statSync(join(consumer, "vendor/shared/index.ts")).mode & 0o222,
+    0,
+    "protect makes copied files read-only",
+  );
 
   mkdirSync(join(consumer, "vendor/shared/.turbo"));
   writeFileSync(join(consumer, "vendor/shared/.turbo/turbo-typecheck.log"), "generated\n");

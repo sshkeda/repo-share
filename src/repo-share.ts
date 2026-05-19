@@ -1,20 +1,76 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const MANIFEST = ".repo-share.json";
 const META_FILE = ".repo-share-copy.json";
 const RESERVED_TARGET_FILES = new Set([META_FILE]);
-const DEFAULT_EXCLUDES = [".git", "AGENTS.md", "node_modules", "dist", "coverage", ".turbo", ".DS_Store", "*.tsbuildinfo"];
+const DEFAULT_EXCLUDES = [
+  ".git",
+  "AGENTS.md",
+  "node_modules",
+  "dist",
+  "coverage",
+  ".turbo",
+  ".DS_Store",
+  "*.tsbuildinfo",
+];
 
-function die(message, code = 1) {
+interface ParsedFlags {
+  locked?: boolean;
+  from?: string;
+  to?: string;
+  include?: string;
+  exclude?: string;
+}
+
+interface ParsedArgs {
+  cmd: string | undefined;
+  name: string | undefined;
+  flags: ParsedFlags;
+}
+
+interface Share {
+  name: string;
+  source: string;
+  sourcePath: string;
+  targetPath: string;
+  include: string[];
+  exclude: string[];
+  hash?: string;
+  sourceHead?: string;
+  updatedAt?: string;
+}
+
+interface Manifest {
+  version: number;
+  shares: Share[];
+}
+
+interface CopyResult {
+  files: string[];
+  hash: string;
+  sourceHead: string;
+  updatedAt: string;
+}
+
+function die(message: string, code: number = 1): never {
   console.error(`repo-share: ${message}`);
   process.exit(code);
 }
 
-function usage() {
+function usage(): void {
   console.log(`repo-share
 
 Usage:
@@ -33,71 +89,126 @@ Invariants:
 `);
 }
 
-function parseArgs(argv) {
+function parseArgs(argv: string[]): ParsedArgs {
   const [cmd, maybeName, ...rest] = argv;
-  const args = { cmd, name: maybeName && !maybeName.startsWith("--") ? maybeName : undefined, flags: {} };
-  const tokens = args.name ? rest : [maybeName, ...rest].filter(Boolean);
+  const flags: ParsedFlags = {};
+  const args: ParsedArgs = {
+    cmd,
+    name: maybeName && !maybeName.startsWith("--") ? maybeName : undefined,
+    flags,
+  };
+  const tokens = args.name ? rest : [maybeName, ...rest].flatMap((token) => (token ? [token] : []));
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
+    if (token === undefined) continue;
     if (!token.startsWith("--")) die(`unexpected argument ${token}`);
     const key = token.slice(2);
     if (key === "locked") {
-      args.flags.locked = true;
+      flags.locked = true;
       continue;
     }
     const value = tokens[++i];
-    if (!value || value.startsWith("--")) die(`missing value for --${key}`);
-    args.flags[key] = value;
+    if (value === undefined || value.startsWith("--")) die(`missing value for --${key}`);
+    if (key === "from") flags.from = value;
+    else if (key === "to") flags.to = value;
+    else if (key === "include") flags.include = value;
+    else if (key === "exclude") flags.exclude = value;
+    else die(`unknown flag --${key}`);
   }
   return args;
 }
 
-function cwd() {
+function cwd(): string {
   return process.cwd();
 }
 
-function manifestPath(root = cwd()) {
+function manifestPath(root: string = cwd()): string {
   return join(root, MANIFEST);
 }
 
-function readManifest(root = cwd()) {
-  const path = manifestPath(root);
-  if (!existsSync(path)) return { version: 1, shares: [] };
-  return JSON.parse(readFileSync(path, "utf8"));
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => (typeof item === "string" ? [item] : []));
 }
 
-function writeManifest(manifest, root = cwd()) {
+function readManifest(root: string = cwd()): Manifest {
+  const path = manifestPath(root);
+  if (!existsSync(path)) return { version: 1, shares: [] };
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    die(`invalid manifest at ${path}: expected an object`);
+  }
+  const versionVal: unknown = "version" in parsed ? parsed.version : undefined;
+  const version = typeof versionVal === "number" ? versionVal : 1;
+  const sharesVal: unknown = "shares" in parsed ? parsed.shares : undefined;
+  if (sharesVal !== undefined && !Array.isArray(sharesVal)) {
+    die(`invalid manifest at ${path}: shares must be an array`);
+  }
+  const sharesRaw: readonly unknown[] = Array.isArray(sharesVal) ? sharesVal : [];
+  const shares: Share[] = sharesRaw.map((entry, index): Share => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      die(`invalid manifest at ${path}: share #${index} is not an object`);
+    }
+    const nameVal: unknown = "name" in entry ? entry.name : undefined;
+    if (typeof nameVal !== "string") die(`invalid manifest at ${path}: share #${index} missing name`);
+    const sourceVal: unknown = "source" in entry ? entry.source : undefined;
+    if (typeof sourceVal !== "string") die(`invalid manifest at ${path}: share ${nameVal} missing source`);
+    const targetPathVal: unknown = "targetPath" in entry ? entry.targetPath : undefined;
+    if (typeof targetPathVal !== "string") die(`invalid manifest at ${path}: share ${nameVal} missing targetPath`);
+    const sourcePathVal: unknown = "sourcePath" in entry ? entry.sourcePath : undefined;
+    const hashVal: unknown = "hash" in entry ? entry.hash : undefined;
+    const sourceHeadVal: unknown = "sourceHead" in entry ? entry.sourceHead : undefined;
+    const updatedAtVal: unknown = "updatedAt" in entry ? entry.updatedAt : undefined;
+    return {
+      name: nameVal,
+      source: sourceVal,
+      sourcePath: typeof sourcePathVal === "string" ? sourcePathVal : ".",
+      targetPath: targetPathVal,
+      include: stringArray("include" in entry ? entry.include : undefined),
+      exclude: stringArray("exclude" in entry ? entry.exclude : undefined),
+      hash: typeof hashVal === "string" ? hashVal : undefined,
+      sourceHead: typeof sourceHeadVal === "string" ? sourceHeadVal : undefined,
+      updatedAt: typeof updatedAtVal === "string" ? updatedAtVal : undefined,
+    };
+  });
+  return { version, shares };
+}
+
+function writeManifest(manifest: Manifest, root: string = cwd()): void {
   writeFileSync(manifestPath(root), JSON.stringify(manifest, null, 2) + "\n");
 }
 
-function normalizeList(value) {
+function normalizeList(value: string | undefined): string[] {
   if (!value) return [];
-  return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-function expandHome(path) {
+function expandHome(path: string): string {
   if (path === "~") return process.env.HOME || path;
   if (path.startsWith("~/")) return join(process.env.HOME || "", path.slice(2));
   return path;
 }
 
-function displayPath(abs) {
+function displayPath(abs: string): string {
   const home = process.env.HOME;
   return home && abs.startsWith(`${home}/`) ? `~/${abs.slice(home.length + 1)}` : abs;
 }
 
-function resolvePath(path, base = cwd()) {
+function resolvePath(path: string, base: string = cwd()): string {
   const expanded = expandHome(path);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(base, expanded);
 }
 
-function git(source, args) {
+function git(source: string, args: string[]): string {
   const proc = spawnSync("git", ["-C", source, ...args], { encoding: "utf8" });
   if (proc.status !== 0) die(`git -C ${source} ${args.join(" ")} failed: ${proc.stderr || proc.stdout}`);
   return proc.stdout.trim();
 }
 
-function ensureCleanGitRepo(source) {
+function ensureCleanGitRepo(source: string): void {
   if (!existsSync(join(source, ".git"))) die(`canonical source is not a git repo: ${source}`);
   const status = git(source, ["status", "--porcelain"]);
   if (status) {
@@ -105,11 +216,15 @@ function ensureCleanGitRepo(source) {
   }
 }
 
-function gitHead(source) {
+function gitHead(source: string): string {
   return git(source, ["rev-parse", "HEAD"]);
 }
 
-function matchesPattern(rel, pattern) {
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesPattern(rel: string, pattern: string): boolean {
   const clean = pattern.replace(/^\.\//, "").replace(/\/$/, "");
   if (!clean) return false;
   if (clean === rel) return true;
@@ -121,21 +236,19 @@ function matchesPattern(rel, pattern) {
   return false;
 }
 
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function isExcluded(rel: string, exclude: string[]): boolean {
+  return [...DEFAULT_EXCLUDES, ...exclude].some(
+    (pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern),
+  );
 }
 
-function isExcluded(rel, exclude) {
-  return [...DEFAULT_EXCLUDES, ...exclude].some((pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern));
-}
-
-function shouldInclude(rel, include, exclude) {
+function shouldInclude(rel: string, include: string[], exclude: string[]): boolean {
   if (isExcluded(rel, exclude)) return false;
   if (include.length === 0) return true;
   return include.some((pattern) => matchesPattern(rel, pattern));
 }
 
-function shouldDescend(rel, include, exclude) {
+function shouldDescend(rel: string, include: string[], exclude: string[]): boolean {
   if (isExcluded(rel, exclude)) return false;
   if (include.length === 0) return true;
   return include.some((pattern) => {
@@ -144,9 +257,9 @@ function shouldDescend(rel, include, exclude) {
   });
 }
 
-function walkFiles(root, include = [], exclude = []) {
-  const out = [];
-  const walk = (dir) => {
+function walkFiles(root: string, include: string[] = [], exclude: string[] = []): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
       const rel = relative(root, abs).replaceAll("\\", "/");
@@ -161,7 +274,7 @@ function walkFiles(root, include = [], exclude = []) {
   return out.sort();
 }
 
-function hashFiles(root, files) {
+function hashFiles(root: string, files: string[]): string {
   const hash = createHash("sha256");
   for (const rel of files) {
     hash.update(rel);
@@ -172,14 +285,14 @@ function hashFiles(root, files) {
   return hash.digest("hex");
 }
 
-function ensureNoReservedManagedFiles(files, share) {
+function ensureNoReservedManagedFiles(files: string[], share: Share): void {
   const reserved = files.filter((file) => RESERVED_TARGET_FILES.has(file));
   if (reserved.length > 0) {
     die(`${share.name} source includes repo-share reserved target file(s): ${reserved.join(", ")}`);
   }
 }
 
-function writeTargetMetadata(targetRoot, share, copied) {
+function writeTargetMetadata(targetRoot: string, share: Share, copied: CopyResult): void {
   writeFileSync(
     join(targetRoot, META_FILE),
     JSON.stringify(
@@ -201,7 +314,7 @@ function writeTargetMetadata(targetRoot, share, copied) {
   );
 }
 
-function makeReadOnly(abs) {
+function makeReadOnly(abs: string): void {
   try {
     chmodSync(abs, 0o444);
   } catch {
@@ -209,13 +322,13 @@ function makeReadOnly(abs) {
   }
 }
 
-function protectTargetFiles(targetRoot, files) {
+function protectTargetFiles(targetRoot: string, files: string[]): void {
   for (const rel of [...files, META_FILE]) {
     makeReadOnly(join(targetRoot, rel));
   }
 }
 
-function copyShare(share, repoRoot = cwd()) {
+function copyShare(share: Share, repoRoot: string = cwd()): CopyResult {
   const source = resolvePath(share.source, repoRoot);
   ensureCleanGitRepo(source);
   const sourceRoot = resolvePath(share.sourcePath || ".", source);
@@ -231,24 +344,29 @@ function copyShare(share, repoRoot = cwd()) {
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(sourceRoot, rel), dest);
   }
-  const copied = { files, hash: hashFiles(targetRoot, files), sourceHead: gitHead(source), updatedAt: new Date().toISOString() };
+  const copied: CopyResult = {
+    files,
+    hash: hashFiles(targetRoot, files),
+    sourceHead: gitHead(source),
+    updatedAt: new Date().toISOString(),
+  };
   writeTargetMetadata(targetRoot, share, copied);
   protectTargetFiles(targetRoot, files);
   return copied;
 }
 
-function targetFiles(share, repoRoot = cwd()) {
+function targetFiles(share: Share, repoRoot: string = cwd()): string[] {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   if (!existsSync(targetRoot)) return [];
   return walkFiles(targetRoot, [], []).filter((file) => !RESERVED_TARGET_FILES.has(file));
 }
 
-function hasTargetMetadata(share, repoRoot = cwd()) {
+function hasTargetMetadata(share: Share, repoRoot: string = cwd()): boolean {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   return existsSync(join(targetRoot, META_FILE));
 }
 
-function protectShareTarget(share, repoRoot = cwd()) {
+function protectShareTarget(share: Share, repoRoot: string = cwd()): number {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   if (!existsSync(targetRoot)) die(`missing target for ${share.name}: ${share.targetPath}`);
   const files = targetFiles(share, repoRoot);
@@ -256,25 +374,25 @@ function protectShareTarget(share, repoRoot = cwd()) {
   return files.length;
 }
 
-function findShare(manifest, name) {
-  const shares = manifest.shares || [];
+function findShare(manifest: Manifest, name: string | undefined): Share[] {
+  const shares = manifest.shares;
   if (!name) return shares;
   const share = shares.find((candidate) => candidate.name === name);
   if (!share) die(`unknown share ${name}`);
   return [share];
 }
 
-function cmdAdd(args) {
+function cmdAdd(args: ParsedArgs): void {
   const name = args.name;
   if (!name) die("add requires a name");
   const from = args.flags.from;
   const to = args.flags.to;
   if (!from || !to) die("add requires --from and --to");
   const manifest = readManifest();
-  if ((manifest.shares || []).some((share) => share.name === name)) die(`share already exists: ${name}`);
+  if (manifest.shares.some((share) => share.name === name)) die(`share already exists: ${name}`);
   const source = resolvePath(from);
   ensureCleanGitRepo(source);
-  const share = {
+  const share: Share = {
     name,
     source: displayPath(source),
     sourcePath: ".",
@@ -283,24 +401,28 @@ function cmdAdd(args) {
     exclude: normalizeList(args.flags.exclude),
   };
   const copied = copyShare(share);
-  Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: copied.updatedAt });
-  manifest.shares = [...(manifest.shares || []), share];
+  share.hash = copied.hash;
+  share.sourceHead = copied.sourceHead;
+  share.updatedAt = copied.updatedAt;
+  manifest.shares = [...manifest.shares, share];
   writeManifest(manifest);
   console.log(`added ${name}: ${copied.files.length} files -> ${to}`);
 }
 
-function cmdSync(args) {
+function cmdSync(args: ParsedArgs): void {
   const manifest = readManifest();
   const shares = findShare(manifest, args.name);
   for (const share of shares) {
     const copied = copyShare(share);
-    Object.assign(share, { hash: copied.hash, sourceHead: copied.sourceHead, updatedAt: copied.updatedAt });
+    share.hash = copied.hash;
+    share.sourceHead = copied.sourceHead;
+    share.updatedAt = copied.updatedAt;
     console.log(`synced ${share.name}: ${copied.files.length} files, ${copied.hash.slice(0, 12)}`);
   }
   writeManifest(manifest);
 }
 
-function cmdCheck(args) {
+function cmdCheck(args: ParsedArgs): void {
   const manifest = readManifest();
   const shares = findShare(manifest, args.name);
   let failed = false;
@@ -311,7 +433,7 @@ function cmdCheck(args) {
     const hash = existsSync(targetRoot) ? hashFiles(targetRoot, files) : "missing";
     if (hash !== share.hash) {
       failed = true;
-      console.error(`stale ${share.name}: expected ${share.hash}, got ${hash}`);
+      console.error(`stale ${share.name}: expected ${share.hash ?? "<unset>"}, got ${hash}`);
     } else if (!hasTargetMetadata(share)) {
       failed = true;
       console.error(`missing metadata ${share.name}: missing ${META_FILE} in ${share.targetPath}`);
@@ -323,7 +445,7 @@ function cmdCheck(args) {
   if (failed) process.exit(1);
 }
 
-function cmdProtect(args) {
+function cmdProtect(args: ParsedArgs): void {
   const manifest = readManifest();
   const shares = findShare(manifest, args.name);
   for (const share of shares) {
@@ -332,14 +454,14 @@ function cmdProtect(args) {
   }
 }
 
-function cmdList() {
+function cmdList(): void {
   const manifest = readManifest();
-  for (const share of manifest.shares || []) {
-    console.log(`${share.name}\t${share.source} -> ${share.targetPath}\t${String(share.hash || "").slice(0, 12)}`);
+  for (const share of manifest.shares) {
+    console.log(`${share.name}\t${share.source} -> ${share.targetPath}\t${(share.hash ?? "").slice(0, 12)}`);
   }
 }
 
-function cmdDiff(args) {
+function cmdDiff(args: ParsedArgs): void {
   const manifest = readManifest();
   const shares = findShare(manifest, args.name);
   for (const share of shares) {
@@ -349,7 +471,7 @@ function cmdDiff(args) {
     rmSync(tmp, { recursive: true, force: true });
     mkdirSync(tmp, { recursive: true });
     const sourceRoot = resolvePath(share.sourcePath || ".", source);
-    const files = walkFiles(sourceRoot, share.include || [], share.exclude || []);
+    const files = walkFiles(sourceRoot, share.include, share.exclude);
     for (const rel of files) {
       const dest = join(tmp, rel);
       mkdirSync(dirname(dest), { recursive: true });
@@ -362,12 +484,12 @@ function cmdDiff(args) {
   }
 }
 
-const args = parseArgs(process.argv.slice(2));
-if (!args.cmd || args.cmd === "help" || args.cmd === "--help" || args.cmd === "-h") usage();
-else if (args.cmd === "add") cmdAdd(args);
-else if (args.cmd === "sync") cmdSync(args);
-else if (args.cmd === "check") cmdCheck(args);
-else if (args.cmd === "protect") cmdProtect(args);
-else if (args.cmd === "list") cmdList(args);
-else if (args.cmd === "diff") cmdDiff(args);
-else die(`unknown command ${args.cmd}`);
+const parsedArgs = parseArgs(process.argv.slice(2));
+if (!parsedArgs.cmd || parsedArgs.cmd === "help" || parsedArgs.cmd === "--help" || parsedArgs.cmd === "-h") usage();
+else if (parsedArgs.cmd === "add") cmdAdd(parsedArgs);
+else if (parsedArgs.cmd === "sync") cmdSync(parsedArgs);
+else if (parsedArgs.cmd === "check") cmdCheck(parsedArgs);
+else if (parsedArgs.cmd === "protect") cmdProtect(parsedArgs);
+else if (parsedArgs.cmd === "list") cmdList();
+else if (parsedArgs.cmd === "diff") cmdDiff(parsedArgs);
+else die(`unknown command ${parsedArgs.cmd}`);
