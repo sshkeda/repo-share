@@ -251,25 +251,39 @@ function matchesPattern(rel: string, pattern: string): boolean {
   return false;
 }
 
+function matchesAny(rel: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern));
+}
+
 function isExcluded(rel: string, exclude: string[]): boolean {
-  return [...DEFAULT_EXCLUDES, ...exclude].some(
-    (pattern) => matchesPattern(rel, pattern) || rel.split("/").includes(pattern),
-  );
+  return matchesAny(rel, [...DEFAULT_EXCLUDES, ...exclude]);
 }
 
-function shouldInclude(rel: string, include: string[], exclude: string[]): boolean {
-  if (isExcluded(rel, exclude)) return false;
-  if (include.length === 0) return true;
-  return include.some((pattern) => matchesPattern(rel, pattern));
-}
-
-function shouldDescend(rel: string, include: string[], exclude: string[]): boolean {
-  if (isExcluded(rel, exclude)) return false;
-  if (include.length === 0) return true;
+// Explicit include patterns override the hardcoded DEFAULT_EXCLUDES so a share
+// can opt into vendoring a normally-excluded directory like `dist`. User-
+// provided `exclude` patterns still win. With no explicit include the share
+// behaves as before: walk the whole tree minus the defaults.
+function descendsInto(rel: string, include: string[]): boolean {
   return include.some((pattern) => {
     const clean = pattern.replace(/^\.\//, "").replace(/\/$/, "");
     return matchesPattern(rel, clean) || clean.startsWith(`${rel}/`) || clean.includes("*");
   });
+}
+
+function shouldInclude(rel: string, include: string[], exclude: string[]): boolean {
+  if (matchesAny(rel, exclude)) return false;
+  if (include.length > 0) {
+    return include.some((pattern) => matchesPattern(rel, pattern));
+  }
+  return !isExcluded(rel, exclude);
+}
+
+function shouldDescend(rel: string, include: string[], exclude: string[]): boolean {
+  if (matchesAny(rel, exclude)) return false;
+  if (include.length > 0) {
+    return descendsInto(rel, include);
+  }
+  return !isExcluded(rel, exclude);
 }
 
 function walkFiles(root: string, include: string[] = [], exclude: string[] = []): string[] {

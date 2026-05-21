@@ -135,3 +135,47 @@ test("add/sync require a clean canonical repo and check --locked verifies commit
   assert.notEqual(stale.status, 0);
   assert.match(stale.stderr, /stale shared/);
 });
+
+test("explicit include patterns override DEFAULT_EXCLUDES so dist/ content can be vendored", () => {
+  const root = mkdtempSync(join(tmpdir(), "repo-share-explicit-include-"));
+  const source = join(root, "source");
+  const consumer = join(root, "consumer");
+  mkdirSync(source);
+  mkdirSync(consumer);
+  initRepo(source);
+  initRepo(consumer);
+
+  mkdirSync(join(source, "dist"));
+  mkdirSync(join(source, "node_modules"));
+  writeFileSync(join(source, "package.json"), '{"name":"src"}\n');
+  writeFileSync(join(source, "dist/cli.js"), "console.log('dist cli');\n");
+  writeFileSync(join(source, "dist/cli.js.map"), "{}\n");
+  writeFileSync(join(source, "node_modules/should-not-copy.js"), "no\n");
+  git(source, ["add", "."]);
+  git(source, ["commit", "-qm", "init"]);
+
+  const added = run(consumer, [
+    "add",
+    "shared",
+    "--from",
+    source,
+    "--to",
+    "vendor/shared",
+    "--include",
+    "dist,package.json",
+  ]);
+  assert.equal(added.status, 0, added.stderr || added.stdout);
+  assert.ok(
+    existsSync(join(consumer, "vendor/shared/dist/cli.js")),
+    "dist/cli.js must be vendored when include lists 'dist'",
+  );
+  assert.ok(
+    existsSync(join(consumer, "vendor/shared/dist/cli.js.map")),
+    "dist/cli.js.map must be vendored when include lists 'dist'",
+  );
+  assert.ok(existsSync(join(consumer, "vendor/shared/package.json")));
+  assert.ok(
+    !existsSync(join(consumer, "vendor/shared/node_modules")),
+    "node_modules must still be excluded by DEFAULT_EXCLUDES when not included",
+  );
+});
