@@ -384,9 +384,31 @@ function copyShare(share: Share, repoRoot: string = cwd(), allowDirty: boolean =
   return copied;
 }
 
+function readTargetMetadata(share: Share, repoRoot: string = cwd()): { managedFiles?: string[] } | undefined {
+  const targetRoot = resolvePath(share.targetPath, repoRoot);
+  const metaPath = join(targetRoot, META_FILE);
+  if (!existsSync(metaPath)) return undefined;
+  try {
+    const raw = JSON.parse(readFileSync(metaPath, "utf8"));
+    if (raw && typeof raw === "object") return raw as { managedFiles?: string[] };
+  } catch {
+    // fall through
+  }
+  return undefined;
+}
+
 function targetFiles(share: Share, repoRoot: string = cwd()): string[] {
   const targetRoot = resolvePath(share.targetPath, repoRoot);
   if (!existsSync(targetRoot)) return [];
+  // Prefer the persisted managedFiles list — it's the source of truth for
+  // what was copied, including files under DEFAULT_EXCLUDES that an explicit
+  // include opted into. Walking the target with no include reapplies
+  // DEFAULT_EXCLUDES on the consumer side, which would silently drop files
+  // like dist/* even though the source share asked for them.
+  const meta = readTargetMetadata(share, repoRoot);
+  if (Array.isArray(meta?.managedFiles)) {
+    return meta.managedFiles.filter((file: unknown): file is string => typeof file === "string" && !RESERVED_TARGET_FILES.has(file));
+  }
   return walkFiles(targetRoot, [], []).filter((file) => !RESERVED_TARGET_FILES.has(file));
 }
 
